@@ -41,6 +41,8 @@
 #include "rf_phy_driver.h"
 #include "flash.h"
 #include "version.h"
+#include "uart.h"
+#include "log.h"
 
 #define DEFAULT_UART_BAUD   115200
 
@@ -85,8 +87,8 @@ static void hal_low_power_io_init(void)
         //TSOP6252 10 IO
         {GPIO_P02,   GPIO_FLOATING   },/*SWD*/
         {GPIO_P03,   GPIO_FLOATING   },/*SWD*/
-        {GPIO_P09,   GPIO_FLOATING   },/*UART TX*/
-        {GPIO_P10,   GPIO_FLOATING   },/*UART RX*/
+        {GPIO_P09,   GPIO_PULL_UP   },/*UART TX*/
+        {GPIO_P10,   GPIO_PULL_UP   },/*UART RX*/
         {GPIO_P11,   GPIO_FLOATING   },
         {GPIO_P14,   GPIO_FLOATING   },
         {GPIO_P15,   GPIO_FLOATING   },
@@ -160,6 +162,7 @@ static void hal_init(void)
         .rd_instr       =   XFRD_FCMD_READ_DUAL
     };
     hal_spif_cache_init(cfg);
+    LOG_INIT();
     hal_gpio_init();
 }
 

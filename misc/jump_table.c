@@ -23,6 +23,7 @@
 #include "pwrmgr.h"
 #include "gpio.h"
 #include "timer.h"
+#include "uart.h"
 
 /*******************************************************************************
     MACROS
@@ -97,7 +98,7 @@ const uint32_t* const jump_table_base[256] __ATTR_SECTION_JUMP__ =
     (const uint32_t*)hard_fault, 0, 0, 0, 0, 0, 0, 0,           // 220 - 227
     0, 0,       // 228 - 229
     0, 0, 0, 0, 0,  // 230 - 234
-    0,      // 235 uart irq handler
+    (const uint32_t*)hal_UART0_IRQHandler,      // 235 uart irq handler
     0, 0, 0, 0, 0,    // 236 - 240
     0, 0, 0, 0, 0, 0, 0, 0, 0,     // 241 - 249, for ISR entry
     0, 0, 0, 0, 0, 0                  // 250 - 255, for ISR entry

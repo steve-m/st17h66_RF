@@ -9,7 +9,7 @@ CC = arm-none-eabi-gcc
 OBJCOPY = arm-none-eabi-objcopy
 SIZE = arm-none-eabi-size
 
-CFLAGS += -W -Wall --std=gnu99 -O3
+CFLAGS += -W -Wall --std=gnu99 -Oz
 CFLAGS += -Wno-parentheses
 CFLAGS += -fno-diagnostics-show-caret
 CFLAGS += -fdata-sections -ffunction-sections
@@ -42,7 +42,9 @@ SRCS += \
 	./lib/rf_phy_driver.c \
 	./misc/jump_table.c \
 	./RTE/Device/ARMCM0/startup_ARMCM0.c \
-	./RTE/Device/ARMCM0/system_ARMCM0.c
+	./RTE/Device/ARMCM0/system_ARMCM0.c \
+	./components/uart.c \
+	./components/my_printf.c
 
 
 DEFINES += \
