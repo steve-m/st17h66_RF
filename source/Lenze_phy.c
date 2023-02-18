@@ -55,6 +55,7 @@
 #include "gpio.h"
 #include "flash.h"
 #include "log.h"
+#include "string.h"
 
 
 /*********************************************************************
@@ -142,6 +143,7 @@ uint32 PHY_ISR_entry_time = 0;
 
 ALIGN4_U8  phyBufRx[256];
 ALIGN4_U8  phyBufTx[256];
+uint8_t phyBufTxLen;
 static uint8_t s_pubAddr[6];
 uint8_t adv_buffer[256];
 
@@ -190,6 +192,7 @@ static uint8_t phy_rx_data_check(void)
     return 0;
 }
 
+/*
 void phy_set_channel(uint8 rfChnIdx)
 {
     if(g_rfPhyFreqOffSet>=0)
@@ -197,6 +200,7 @@ void phy_set_channel(uint8 rfChnIdx)
     else
         PHY_REG_WT(0x400300b4, ((255+g_rfPhyFreqOffSet)<<16)+((255+g_rfPhyFreqOffSet)<<8)+(rfChnIdx-1) );
 }
+*/
 
 void phy_hw_go(void)
 {
@@ -243,35 +247,157 @@ void phy_hw_set_srx(uint16 rxTimeOutUs)
 {
     ll_hw_set_rx_timeout(rxTimeOutUs);
     ll_hw_set_srx();
-    ll_hw_set_trx_settle(   PHYPLUS_HW_BB_DELAY,         // set BB delay
-                            PHYPLUS_HW_AFE_DELAY,
-                            PHYPLUS_HW_PLL_DELAY);        //RxAFE,PLL
+    ll_hw_set_trx_settle(LL_HW_BB_DELAY, LL_HW_AFE_DELAY, LL_HW_PLL_DELAY);          //RxAFE,PLL
+
 }
 
 void phy_hw_set_stx(void)
 {
     ll_hw_set_stx();
-    ll_hw_set_trx_settle(   PHYPLUS_HW_BB_DELAY,         // set BB delay
-                            PHYPLUS_HW_AFE_DELAY,
-                            PHYPLUS_HW_PLL_DELAY);        //RxAFE,PLL
+    ll_hw_set_trx_settle(LL_HW_BB_DELAY, LL_HW_AFE_DELAY, LL_HW_PLL_DELAY);          //RxAFE,PLL
+
 }
 
 void phy_hw_set_trx(uint16 rxTimeOutUs)
 {
     ll_hw_set_rx_timeout(rxTimeOutUs);
     ll_hw_set_trx();
-    ll_hw_set_trx_settle(   PHYPLUS_HW_BB_DELAY,         // set BB delay
-                            PHYPLUS_HW_AFE_DELAY,
-                            PHYPLUS_HW_PLL_DELAY);        //RxAFE,PLL
+    ll_hw_set_trx_settle(LL_HW_BB_DELAY, LL_HW_AFE_DELAY, LL_HW_PLL_DELAY);          //RxAFE,PLL
+
 }
+
+static void zb_set_channel (uint8_t chn)
+{
+    uint32_t rfChnIdx = (chn - 10) * 5;
+
+    if(g_rfPhyFreqOffSet >= 0)
+    {
+        PHY_REG_WT(0x400300B4, (g_rfPhyFreqOffSet << 16) + (g_rfPhyFreqOffSet << 8) + rfChnIdx);
+    }
+    else
+    {
+        PHY_REG_WT(0x400300B4, ((255 + g_rfPhyFreqOffSet) << 16) + ((255 + g_rfPhyFreqOffSet) << 8) + (rfChnIdx - 1) );
+    }
+    ll_hw_ign_rfifo(LL_HW_IGN_CRC);
+}
+
+
 
 void phy_hw_timing_setting(void)
 {
-    ll_hw_set_tx_rx_release (10,     1);
-    ll_hw_set_rx_tx_interval(       60);        //T_IFS=150us for BLE 1M
-    ll_hw_set_tx_rx_interval(       66);        //T_IFS=150us for BLE 1M
-    ll_hw_set_trx_settle    (57, 8, 52);        //TxBB,RxAFE,PL
+
+    ll_hw_set_tx_rx_release     (10, 1);
+    ll_hw_set_rx_tx_interval(98);               // T_IFS = 192+2us for ZB 98
+    ll_hw_set_tx_rx_interval(108);              // T_IFS = 192-6us for ZB 108
+    ll_hw_set_trx_settle(LL_HW_BB_DELAY, LL_HW_AFE_DELAY, LL_HW_PLL_DELAY);    // TxBB, RxAFE, PLL
 }
+
+void send_packet()
+{
+LOG("Sending packet");
+    uint8_t m_radio_tx_num = 0;
+    phyBufTx[2] = 0x88;
+    phyBufTx[3] = m_radio_tx_num++;
+    uint8_t pan = 6754;
+    #define JOIN_REQUEST 0x01
+#define ZIGBEE_BROADCAST_ADDRESS 0xFFFF
+
+uint16_t src = 0x12345987;
+
+phyBufTx[2] = JOIN_REQUEST;
+phyBufTx[3] = m_radio_tx_num;
+phyBufTx[4] = ((pan >> 0) & (0xFF));
+phyBufTx[5] = ((pan >> 8) & (0xFF));
+phyBufTx[6] = ((ZIGBEE_BROADCAST_ADDRESS >> 0) & 0xFF);
+phyBufTx[7] = ((ZIGBEE_BROADCAST_ADDRESS >> 8) & 0xFF);
+phyBufTx[8] = ((src >> 0) & 0xFF);
+phyBufTx[9] = ((src >> 8) & 0xFF);
+phyBufTx[10] = 0x3F;
+
+uint8_t count = 0; //Payload size
+phyBufTx[0] = 11 + count + 2; // hdr, data, crc
+    uint16_t total = 1 + 11 + count + 2; // lenb, hdr, data, crc
+
+/*
+debug1("Sending join request from %04X", (int)src);
+memcpy(&buffer[12], join_payload, join_payload_length);
+    // AMID handled below
+    //debug1("csnd %04X->%04X[%02X](%d) a:%d", (int)src, (int)dst, (int)amid, (int)count, (int)need_ack);
+    memcpy(&phyBufTx[12], comms_get_payload(iface, p_msg, count), count);
+
+    uint32_t evt_time = 0;
+    // Pick correct AMID, add timestamp footer when needed
+    if (comms_event_time_valid(iface, p_msg))
+    {
+        phyBufTx[11] = 0x3d; // 3D is used by TinyOS AM for timesync messages
+        phyBufTx[12+count] = amid;
+        evt_time = comms_get_event_time(iface, p_msg);
+        count += 5;
+    }
+    else
+    {
+        //debug1("evt time NOT valid");
+        phyBufTx[11] = amid;
+    }
+
+    phyBufTx[0] = 11 + count + 2; // hdr, data, crc
+    uint16_t total = 1 + 11 + count + 2; // lenb, hdr, data, crc
+
+   // tx_timestamps[RADIO_SEND_MSG_PCKT_DONE] = radio_timestamp();
+*/
+    phyBufTxLen = total;
+   rf_tx(total);
+
+}
+
+
+/*
+static uint8_t zbll_hw_read_rfifo_zb (uint8_t* rxPkt, uint16_t* pktLen, uint32_t* pktFoot0, uint32_t* pktFoot1)
+{
+    int rdPtr, wrPtr, rdDepth, blen, wlen;
+    uint32_t* p_rxPkt=(uint32_t*)rxPkt;
+
+    ll_hw_get_rfifo_info(&rdPtr,&wrPtr,&rdDepth);
+
+    if (rdDepth > 0)
+    {
+        *p_rxPkt++ = *(volatile uint32_t*)(LL_HW_RFIFO);
+
+        blen = rxPkt[0];           //get the byte length for header
+
+        if (blen >= 140) // This is bad, if we don't break out here, the next loop will trash a lot of stuff
+        {
+            rxPkt[0]  = 0;
+            *pktFoot0 = 0;
+            *pktFoot1 = 0;
+            *pktLen = blen + 1;
+            return 0;
+        }
+
+        wlen = 1 + ((blen) >> 2);  //blen included the 2byte crc
+
+        while (p_rxPkt < (uint32_t *)rxPkt + wlen)
+        {
+            *p_rxPkt++ = *(volatile uint32_t*)(LL_HW_RFIFO);
+        }
+
+        *pktFoot0 = *(volatile uint32_t*)(LL_HW_RFIFO);
+        *pktFoot1 = *(volatile uint32_t*)(LL_HW_RFIFO);
+
+        *pktLen = blen + 1;
+        return wlen;
+    }
+    else
+    {
+        rxPkt[0]  = 0;
+        *pktFoot0 = 0;
+        *pktFoot1 = 0;
+        *pktLen   = 0;
+        return 0;
+    }
+}
+*/
+
 
 void phy_hw_pktFmt_Config(pktCfg_t cfg)
 {
@@ -298,6 +424,59 @@ void phy_hw_pktFmt_Config(pktCfg_t cfg)
     //syncword
     PHYPLUS_SET_SYNCWORD(cfg.syncWord);
 }
+void rf_tx(uint8_t len)
+{
+	LOG("HERE");
+   ll_hw_rst_rfifo();
+    ll_hw_rst_tfifo();
+        
+    /*
+    if (s_phy.Status != PHYPLUS_RFPHY_IDLE)
+    {
+	    LOG("STOPPING");
+        phy_hw_stop();
+    }
+    */
+    LOG("SENDING");
+    phy_hw_set_stx();
+
+    uint8_t needAck = 0;
+    if (needAck)
+    {
+    //    radio_tx_wait_ack = true;
+        phyBufTx[1] = 0x61;
+    }
+    else
+    {
+     //   radio_tx_wait_ack = false;
+        phyBufTx[1] = 0x41;
+    }
+
+    /*
+    if (evt_time != 0)
+    {
+        uint32_t diff, ti;
+        uint16_t count = len - 19;
+        ti = radio_timestamp();
+        diff = evt_time - ti;
+
+        phyBufTx[13+count] = diff>>24;
+        phyBufTx[14+count] = diff>>16;
+        phyBufTx[15+count] = diff>>8;
+        phyBufTx[16+count] = diff;
+    }
+    */
+    ll_hw_write_tfifo(&phyBufTx[0], len);
+    ll_hw_go();
+
+    uint32_t newmode = ll_hw_get_tr_mode();
+        //info1("rf : %d md:%d",osKernelGetTickCount(), (int)newmode);
+    if (LL_HW_MODE_STX != newmode)
+    {
+        LOG("mode: %d != %d", (int)newmode, (int)LL_HW_MODE_STX);
+    }
+
+}
 
 void phy_rf_tx(void)
 {
@@ -305,7 +484,8 @@ void phy_rf_tx(void)
     HAL_ENTER_CRITICAL_SECTION();
     phy_hw_pktFmt_Config(s_pktCfg);
     phy_hw_timing_setting();
-    phy_set_channel(s_phy.rfChn);
+    //phy_set_channel(s_phy.rfChn);
+    zb_set_channel(11);
 
     if(s_phy.Status==PHYPLUS_RFPHY_TRX_ONLY)
         phy_hw_set_trx(s_phy.rxAckTO);
@@ -328,7 +508,8 @@ void phy_rf_rx(void)
     HAL_ENTER_CRITICAL_SECTION();
     phy_hw_pktFmt_Config(s_pktCfg);
     phy_hw_timing_setting();
-    phy_set_channel(s_phy.rfChn);
+    //phy_set_channel(s_phy.rfChn);
+    zb_set_channel(11);
     phy_hw_set_srx(s_phy.rxOnlyTO);
     ll_hw_rst_tfifo();
     ll_hw_rst_rfifo();
@@ -419,6 +600,7 @@ void phy_tx_buf_updata(uint8_t* adva,uint8_t* txHead,uint8_t* txPayload,uint8_t 
 */
 void PLUSPHY_IRQHandler(void)
 {
+LOG("HANDLING INTERRUPT");
     uint8         mode;
     uint32_t      irq_status;
     //uint32_t      T2, delay;
@@ -528,90 +710,12 @@ void LenzePhy_Init(uint8 task_id)
     LenzePhy_TaskID = task_id;
     //set phy irq handeler
     JUMP_FUNCTION(V4_IRQ_HANDLER) = (uint32_t)&PLUSPHY_IRQHandler;
-    // read flash driectly becasue HW has do the address mapping for read Flash operation
-    uint8_t p[6];
-    hal_flash_read(0x11004000,p,6);
 
-/// cf. here: https://www.argenox.com/library/bluetooth-low-energy/ble-advertising-primer/
-/// First 6 bytes of bluetooth packet are MAC adddress
-
-
-    s_pubAddr[5] = 0x11;
-    s_pubAddr[4] = 0x22;
-    s_pubAddr[3] = 0x33;
-    s_pubAddr[2] = 0x44;
-    s_pubAddr[1] = 0x55;
-    s_pubAddr[0] = 0x66;
-
-    //init tx buf
-    for(uint8_t i=0; i<255; i++)
-        phyBufTx[i]=0;
-
-    uint8_t addressLength = 31;
-
-    // config tx buf
-    //adv buffer init
-    {
-        adv_buffer[0] = 0x02; // Advertisement length
-        adv_buffer[1] = 0x01; // Advertysement type
-        adv_buffer[2] = 0x06; // Payload
-        adv_buffer[3] = 0x10; // Advertisement length
-        adv_buffer[4] = 0xFF; // Advertisement type
-        adv_buffer[5] = 0x04; // Start manufacturer
-        adv_buffer[6] = 0x05;
-        adv_buffer[7] = 0x01;
-        adv_buffer[8] = 0x02;
-        adv_buffer[9] = 0x03;
-        adv_buffer[10] = 0xcc; //
-        adv_buffer[11] = 0x00; //
-        adv_buffer[12] = 0x03; //
-        adv_buffer[13] = 0xaa; //
-        adv_buffer[14] = 0x00; //
-        adv_buffer[15] = 0x93; //
-        adv_buffer[16] = 0xaa; //
-        adv_buffer[17] = 0x67; //
-        adv_buffer[18] = 0xF7;
-        adv_buffer[19] = 0xDB; //End manufacturer
-        adv_buffer[20] = 0x0A;
-        adv_buffer[21] = 0x08; //Local name
-        adv_buffer[22] = 'e';
-        adv_buffer[23] = 'l';
-        adv_buffer[24] = 'l';
-        adv_buffer[25] = 'o';
-        adv_buffer[26] = 'W';
-        adv_buffer[27] = 'o';
-        adv_buffer[28] = 'r';
-        adv_buffer[29] = 'l';
-        adv_buffer[30] = 'd'; // End of manufacturer info
-	adv_buffer[31] = 'H';
-	adv_buffer[32] = 'e';
-	adv_buffer[33] = 'H';
-	adv_buffer[34] = 'e';
-	adv_buffer[35] = 'l';
-	adv_buffer[36] = 'l';
-	adv_buffer[37] = 'o';
-	adv_buffer[38] = 'W';
-	adv_buffer[39] = 'o';
-	adv_buffer[40] = 'r';
-        uint8_t advHead[2]= {0x00,(addressLength+6)}; 
-        //tx buf date update
-        phy_tx_buf_updata(s_pubAddr,advHead,adv_buffer,addressLength);
-    }
-    //phy pktfmt config
     s_phy.Status        =   PHYPLUS_RFPHY_IDLE;
+
     s_phy.txIntv        =   500;//ms
-    s_phy.rxIntv        =   200;//ms
-    s_phy.rxAckTO       =   500;//us
-    s_phy.rxOnlyTO      =   10*1000;//us
-    s_phy.rfChn         =   BLE_ADV_CHN37;//26;//
-    s_pktCfg.pktFmt     =   PHYPLUS_PKT_FMT_1M;
-    s_pktCfg.pduLen     =   31+6;
-    s_pktCfg.crcFmt     =   LL_HW_CRC_BLE_FMT;//LL_HW_CRC_BLE_FMT;LL_HW_CRC_NULL
-    s_pktCfg.crcSeed    =   DEFAULT_CRC_SEED;
-    s_pktCfg.wtSeed     =   WHITEN_SEED_CH37;//DEFAULT_WHITEN_SEED;
-    s_pktCfg.syncWord   =   DEFAULT_SYNCWORD;
+
     VOID osal_start_timerEx(LenzePhy_TaskID, PPP_PERIODIC_TX_EVT, 1000);
-    VOID osal_start_timerEx(LenzePhy_TaskID, PPP_PERIODIC_RX_EVT, 2500);
 }
 
 
@@ -619,7 +723,6 @@ static void process_rx_done_evt(void)
 {
     /**
         37->38->39 scan channel
-    */
     uint32_t t0=read_current_fine_time();
 
     if(TIME_DELTA(t0, s_phy.rxScanT0)<s_phy.rxOnlyTO)
@@ -647,15 +750,15 @@ static void process_rx_done_evt(void)
     }
     else if(s_phy.rfChn==BLE_ADV_CHN39)
     {
-        s_phy.Status = PHYPLUS_RFPHY_IDLE;
     }
+    */
+        s_phy.Status = PHYPLUS_RFPHY_IDLE;
 }
 
 static void process_tx_done_evt(void)
 {
     /**
         37->38->39 adv channel
-    */
     if(s_phy.rfChn==BLE_ADV_CHN37)
     {
         s_phy.rfChn = BLE_ADV_CHN38;
@@ -672,6 +775,8 @@ static void process_tx_done_evt(void)
     {
         s_phy.Status = PHYPLUS_RFPHY_IDLE;
     }
+    */
+	s_phy.Status = PHYPLUS_RFPHY_IDLE;
 }
 
 
@@ -690,6 +795,7 @@ static void process_tx_done_evt(void)
 */
 uint16 LenzePhy_ProcessEvent(uint8 task_id, uint16 events)
 {
+	//LOG("PROCESSEVENT");
     VOID task_id;
 
     if (events & PPP_PERIODIC_TX_EVT)
@@ -697,13 +803,14 @@ uint16 LenzePhy_ProcessEvent(uint8 task_id, uint16 events)
         if(s_phy.Status==PHYPLUS_RFPHY_IDLE)
         {
             s_phy.Status = PHYPLUS_RFPHY_TX_ONLY;
-            s_phy.rfChn = BLE_ADV_CHN37;
-            s_pktCfg.wtSeed = WHITEN_SEED_CH37;
-            phy_rf_tx();
+            send_packet();
             osal_start_timerEx(LenzePhy_TaskID,PPP_PERIODIC_TX_EVT,s_phy.txIntv);
+
         }
         else
         {
+		LOG("Send again");
+	    /// Send the event again.
             osal_start_timerEx(LenzePhy_TaskID,PPP_PERIODIC_TX_EVT,20);
         }
 
@@ -718,7 +825,7 @@ uint16 LenzePhy_ProcessEvent(uint8 task_id, uint16 events)
             s_phy.rfChn = BLE_ADV_CHN37;
             s_phy.rxScanT0 = read_current_fine_time();
             s_pktCfg.wtSeed = WHITEN_SEED_CH37;
-            phy_rf_rx();
+            //rf_rx(phyBufTxLen);
             osal_start_timerEx(LenzePhy_TaskID,PPP_PERIODIC_RX_EVT,s_phy.rxIntv);
         }
         else

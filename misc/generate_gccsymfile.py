@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 syms = [
+    'll_hw_go',
     'clk_init',
     'drv_disable_irq',
     'drv_enable_irq',

@@ -132,11 +132,11 @@ static void ble_mem_init_config(void)
 static void hal_rfphy_init(void)
 {
     //============config the txPower
-    g_rfPhyTxPower  = RF_PHY_TX_POWER_N2DBM ;
+    g_rfPhyTxPower  = RF_PHY_TX_POWER_5DBM;
     //============config BLE_PHY TYPE
-    g_rfPhyPktFmt   = PKT_FMT_BLE1M;
+    g_rfPhyPktFmt   = PKT_FMT_ZIGBEE;
     //============config RF Frequency Offset
-    g_rfPhyFreqOffSet   =RF_PHY_FREQ_FOFF_00KHZ;
+    g_rfPhyFreqOffSet   =RF_PHY_FREQ_FOFF_20KHZ;
     //============config xtal 16M cap
     XTAL16M_CAP_SETTING(0x09);
     XTAL16M_CURRENT_SETTING(0x01);

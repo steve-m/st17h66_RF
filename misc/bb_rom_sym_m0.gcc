@@ -1,3 +1,4 @@
+ll_hw_go = 0x00010cf9;
 clk_init = 0x0000a5ed;
 drv_disable_irq = 0x0000a975;
 drv_enable_irq = 0x0000a99d;
