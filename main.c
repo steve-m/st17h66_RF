@@ -136,7 +136,8 @@ static void hal_rfphy_init(void)
     //============config BLE_PHY TYPE
     g_rfPhyPktFmt   = PKT_FMT_ZIGBEE;
     //============config RF Frequency Offset
-    g_rfPhyFreqOffSet   =RF_PHY_FREQ_FOFF_20KHZ;
+    //g_rfPhyFreqOffSet   =RF_PHY_FREQ_FOFF_20KHZ;
+    g_rfPhyFreqOffSet   = 0; //TODO
     //============config xtal 16M cap
     XTAL16M_CAP_SETTING(0x09);
     XTAL16M_CURRENT_SETTING(0x01);
@@ -147,6 +148,7 @@ static void hal_rfphy_init(void)
     NVIC_SetPriority((IRQn_Type)TIM4_IRQn,  IRQ_PRIO_HIGH);     //LL_EXA_ADV
     //ble memory init and config
     ble_mem_init_config();
+    rf_phy_ini();
 }
 
 
@@ -174,10 +176,10 @@ int  main(void)
     g_clk32K_config = CLK_32K_RCOSC;//CLK_32K_XTAL;//CLK_32K_XTAL,CLK_32K_RCOSC
     drv_irq_init();
     init_config();
-    hal_rfphy_init();
     hal_init();
+    hal_rfphy_init();
     #if(_BUILD_FOR_DTM_==1)
-    rf_phy_direct_test();
+        rf_phy_direct_test();
     #endif
     app_main();
 }

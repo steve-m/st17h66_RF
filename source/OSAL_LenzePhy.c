@@ -49,7 +49,7 @@
 #include "OSAL_Tasks.h"
 
 /* Application */
-#include "Lenze_phy.h"
+#include "PhysicalLayer.h"
 
 /*********************************************************************
     GLOBAL VARIABLES
@@ -58,7 +58,7 @@
 // The order in this table must be identical to the task initialization calls below in osalInitTask.
 const pTaskEventHandlerFn tasksArr[] =
 {
-    LenzePhy_ProcessEvent,                                  // task
+    ProcessPhysicalLayerEvents,                                  // task
 };
 
 const uint8 tasksCnt = sizeof( tasksArr ) / sizeof( tasksArr[0] );
@@ -83,7 +83,7 @@ void osalInitTasks( void )
     tasksEvents = (uint16*)osal_mem_alloc( sizeof( uint16 ) * tasksCnt);
     osal_memset( tasksEvents, 0, (sizeof( uint16 ) * tasksCnt));
     /* Application */
-    LenzePhy_Init( taskID++ );
+    InitializePhysicalLayer( taskID++ );
 }
 
 /*********************************************************************

@@ -24,6 +24,7 @@
 #include "gpio.h"
 #include "timer.h"
 #include "uart.h"
+#include "log.h"
 
 /*******************************************************************************
     MACROS
@@ -32,6 +33,7 @@ void (*trap_c_callback)(void);
 
 void _hard_fault(uint32_t* arg)
 {
+    LOG("HERE");
     if (trap_c_callback)
     {
         trap_c_callback();

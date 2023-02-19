@@ -29,8 +29,9 @@ INCLUDES += \
 
 SRCS += \
 	./main.c \
-	./source/Lenze_phy.c \
-	./source/OSAL_LenzePhy.c \
+        ./source/PhysicalLayer.c \
+        ./source/Zigbee.c \
+        ./source/OSAL_LenzePhy.c \
 	./components/clock.c \
 	./components/flash.c \
 	./components/fs.c \

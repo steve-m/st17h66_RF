@@ -92,4 +92,9 @@ typedef enum IRQn
 #include "mcu_phy_prime.h"
 #endif
 
+#ifdef __cplusplus
+}
+#endif
+
+
 #endif
