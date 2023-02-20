@@ -4,12 +4,25 @@
 #include "types.h"
 
 /// Defines for events
-#define PPP_PERIODIC_TX_EVT         0x0001
-#define PPP_PERIODIC_RX_EVT         0x0002
-#define PPP_TX_DONE_EVT             0x0004
-#define PPP_RX_DONE_EVT             0x0008
-#define PPP_TRX_DONE_EVT            0x0010
-#define PPP_RX_DATA_PROCESS_EVT     0x0020
+#define TX_EVT         0x0001
+#define RX_EVT         0x0002
+#define TX_DONE_EVT             0x0004
+#define RX_DONE_EVT             0x0008
+#define TRX_DONE_EVT            0x0010
+#define RX_DATA_PROCESS_EVT     0x0020
+#define ZIGBEE_INTERVIEW_EVT    0x0040
+#define ZIGBEE_ACK_EVT    0x0080
+
+enum ZigbeeInterviewState
+{
+    ZIGBEE_START = 0,
+    ZIGBEE_SENT_ASSOCIATION_REQUEST =1,
+    ZIGBEE_ACK_ASSOCIATION_REQUEST = 2,
+    ZIGBEE_SENT_DATA_REQUEST_AFTER_ASSOCIATION = 3,
+    ZIGBEE_ACK_DATA_REQUEST_AFTER_ASSOCIATION = 4,
+    ZIGBEE_ASSOCIATION_RESPONSE_RECEIVED=5,
+    ZIGBEE_ASSOCIATION_RESPONSE_ACK=5,
+};
 
 struct PhysicalLayerInformation
 {
@@ -26,7 +39,10 @@ struct PhysicalLayerInformation
 
     uint8_t channel;
     uint16_t nodeAddress;
+    uint8_t extendedAddress[8];
     uint16_t panId;
+
+    enum ZigbeeInterviewState zigbeeInterviewState;
 };
 
 
@@ -38,9 +54,14 @@ struct PacketInformation
     uint8_t crcFormat;
     uint32_t crcSeed;
     uint32_t syncWord;
+    uint8_t currentSequenceId;
+    uint8_t currentZigbeeSeq;
     ALIGN4_U8 bufferReceive[256];
     uint8_t bufferTransmitLength;
     ALIGN4_U8 bufferTransmit[256];
+    uint16_t bufferReceivedByteLength;
+    uint8_t bufferReceivedIntLength;
+    uint32_t receivedFooter[2];
 
     uint16_t receivedFrequencyOffset;
     uint8_t CarrSens;

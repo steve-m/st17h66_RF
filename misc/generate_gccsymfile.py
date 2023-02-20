@@ -20,6 +20,8 @@ syms = [
     'll_hw_clr_irq',
     'll_hw_get_irq_status',
     'll_hw_get_tr_mode',
+    'll_hw_get_rfifo_info',
+    'll_hw_read_rfifo_zb',
     'll_hw_ign_rfifo',
     'll_hw_read_rfifo',
     'll_hw_read_rfifo_pplus',

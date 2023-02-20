@@ -54,6 +54,8 @@ static void onProcessRxDoneEvent(void);
 
 
 void PhysicalLayerSendRawPacket(struct PacketInformation* packet);
+void PhysicalLayerReceiveRawPacket(uint16_t rxTimeoutUs);
+void RawZigbeeToPacket(struct PacketInformation *packet);
 
 void SetPhysicalHardwareSRX(uint16_t rxTimeoutUs);
 
@@ -64,15 +66,20 @@ void InitializePhysicalLayer(uint8_t task_id) {
   // set phy irq handeler
 
   g_physicalLayerInformation.txIntervalMs = 500; // ms
+  g_physicalLayerInformation.rxIntervalMs = 200; // ms
 
   //Zigbee specific info
-  g_physicalLayerInformation.channel = 12;
-  g_physicalLayerInformation.nodeAddress = (uint16_t)0x12345987;
+  g_physicalLayerInformation.channel = 11;
+  g_physicalLayerInformation.nodeAddress = (uint16_t)0x00;
   g_physicalLayerInformation.panId = (uint16_t)6754;
+  g_physicalLayerInformation.zigbeeInterviewState = ZIGBEE_START;
+  uint8_t eAddr[8] = {0x85, 0x94, 0x2d, 0x7b, 0xef, 0x38, 0xc1, 0xa4};
+  memcpy(g_physicalLayerInformation.extendedAddress,eAddr, sizeof(eAddr));
 
   g_currentPacketInformation.receivedFrequencyOffset = 0;
   g_currentPacketInformation.CarrSens = 0;
   g_currentPacketInformation.receivedSignalStrength = 0;
+  g_currentPacketInformation.currentSequenceId = 0;
 
   JUMP_FUNCTION(V4_IRQ_HANDLER) = (uint32_t)&PhysicalLayerInterruptRequestHandler;
 
@@ -82,16 +89,13 @@ void InitializePhysicalLayer(uint8_t task_id) {
   // Start in "idle" mode
   g_physicalLayerInformation.Status = PHYSICAL_LAYER_IDLE;
 
-
-  LOG("Starting initial task");
-  // Add an interrupt request to the task
-  VOID osal_start_timerEx(g_physicalLayerTaskId, PPP_PERIODIC_TX_EVT, 1000);
+  /// Start Zigbee interview
+  VOID osal_start_timerEx(g_physicalLayerTaskId, ZIGBEE_INTERVIEW_EVT, 1000);
 }
 
 
 void PhysicalLayerInterruptRequestHandler(void)
 {
-  LOG("PhysicalLayerInterruptRequestHandler called");
 
   uint8 mode;
   uint32_t irq_status = ll_hw_get_irq_status();
@@ -111,9 +115,11 @@ void PhysicalLayerInterruptRequestHandler(void)
   if (mode == LL_HW_MODE_STX && (g_physicalLayerInformation.Status == PHYSICAL_LAYER_TX_ONLY))
   {
 
-      LOG("Transmission done!");
-    /// Set a new event that the transmission is done
-    osal_set_event(g_physicalLayerTaskId, PPP_TX_DONE_EVT);
+    // We want to immediate move on to listening in case we're expecting an ACK packet.
+    onProcessTxDoneEvent();
+    // Immediately switch to Receive mode
+    osal_set_event(g_physicalLayerTaskId, RX_EVT);
+    //osal_start_timerEx(g_physicalLayerTaskId, RX_EVT, 20);
 
   }else if ((mode == LL_HW_MODE_SRX && (g_physicalLayerInformation.Status == PHYSICAL_LAYER_RX_ONLY)) || (mode == LL_HW_MODE_TRX && (g_physicalLayerInformation.Status == PHYSICAL_LAYER_TRX_ONLY)))
   {
@@ -121,38 +127,20 @@ void PhysicalLayerInterruptRequestHandler(void)
     // Get information about the packet
     rf_phy_get_pktFoot(&g_currentPacketInformation.receivedSignalStrength, &g_currentPacketInformation.receivedFrequencyOffset, &g_currentPacketInformation.CarrSens);
 
-    if (g_currentPacketInformation.crcFormat == LL_HW_CRC_NULL)
+    if(irq_status & LIRQ_RTO)
     {
-      if (0 == (irq_status & LIRQ_RTO))
-      {
-        uint16_t pktLen;
-        uint32_t pktFoot0, pktFoot1;
-        ll_hw_read_rfifo_pplus(g_currentPacketInformation.bufferReceive, &pktLen, &pktFoot0, &pktFoot1);
-        rf_phy_get_pktFoot_fromPkt(pktFoot0, pktFoot1, &g_currentPacketInformation, &g_currentPacketInformation.receivedFrequencyOffset, &g_currentPacketInformation.CarrSens);
-
-        if(!checkReceivedData())
-            osal_set_event(g_physicalLayerTaskId, PPP_RX_DATA_PROCESS_EVT);
-      }
-
-    } else
+        // Restart
+        LOG("t");
+        osal_start_timerEx(g_physicalLayerTaskId, RX_EVT, 20);
+    }else if(irq_status & LIRQ_COK)
     {
-      if (irq_status & LIRQ_COK)
-      {
-        uint16_t pktLen;
-        uint32_t pktFoot0, pktFoot1;
-        ll_hw_read_rfifo(g_currentPacketInformation.bufferReceive, &pktLen, &pktFoot0, &pktFoot1);
-        rf_phy_get_pktFoot_fromPkt(pktFoot0, pktFoot1, &g_currentPacketInformation, &g_currentPacketInformation.receivedFrequencyOffset,
-                                   &g_currentPacketInformation.CarrSens);
-        if(!checkReceivedData())
-            osal_set_event(g_physicalLayerTaskId, PPP_RX_DATA_PROCESS_EVT);
-      }
+        // Read the zigbee packet
+        //LOG("Read packet of length %d", g_currentPacketInformation.bufferReceivedByteLength);
+
+        RawZigbeeToPacket(&g_currentPacketInformation);
+
+        osal_set_event(g_physicalLayerTaskId, RX_DATA_PROCESS_EVT);
     }
-
-      // Set a new event that receiving is done.
-      if(mode == LL_HW_MODE_SRX)
-          osal_set_event(g_physicalLayerTaskId, PPP_RX_DONE_EVT);
-      else // mode == LL_HW_MODE_TRX
-        osal_set_event(g_physicalLayerTaskId, PPP_TRX_DONE_EVT);
   }else
   {
       LOG("Other interrupt");
@@ -168,75 +156,128 @@ uint16_t ProcessPhysicalLayerEvents( uint8_t taskId, uint16_t events )
 {
   VOID taskId;
 
-  if (events & PPP_PERIODIC_TX_EVT)
+  if(events & ZIGBEE_ACK_EVT)
+  {
+          g_physicalLayerInformation.Status = PHYSICAL_LAYER_TX_ONLY;
+          ZigbeeSetChannel(g_physicalLayerInformation.channel);
+          prepareZigbeeAckPacket(&g_physicalLayerInformation, &g_currentPacketInformation);
+          g_physicalLayerInformation.zigbeeInterviewState++;
+          PhysicalLayerSendRawPacket(&g_currentPacketInformation);
+
+      return events ^ ZIGBEE_ACK_EVT;
+  }
+
+  if (events & TX_EVT)
   {
     // If the physical layer is idle, make transition to state "send packet"
     if (g_physicalLayerInformation.Status == PHYSICAL_LAYER_IDLE)
     {
-
-
+          // Send association request
           g_physicalLayerInformation.Status = PHYSICAL_LAYER_TX_ONLY;
 
           ZigbeeSetChannel(g_physicalLayerInformation.channel);
-          prepareZigbeeBroadcastPacket(&g_physicalLayerInformation, &g_currentPacketInformation);
+
+          if(g_physicalLayerInformation.zigbeeInterviewState == ZIGBEE_START)
+          {
+              prepareZigbeeAssociationRequestPacket(&g_physicalLayerInformation, &g_currentPacketInformation);
+          }else if(g_physicalLayerInformation.zigbeeInterviewState == ZIGBEE_ACK_ASSOCIATION_REQUEST)
+          {
+            prepareZigbeeDataRequestAfterAssociation(&g_physicalLayerInformation, &g_currentPacketInformation);
+          }
+          else if(g_physicalLayerInformation.zigbeeInterviewState == ZIGBEE_ASSOCIATION_RESPONSE_RECEIVED)
+          {
+              prepareZigbeeAckPacket(&g_physicalLayerInformation, &g_currentPacketInformation);
+          }else
+          {
+              LOG("INVALID");
+          }
+          g_physicalLayerInformation.zigbeeInterviewState++;
           PhysicalLayerSendRawPacket(&g_currentPacketInformation);
 
-         dbg_printf("For some reason I need this here");
-          osal_start_timerEx(g_physicalLayerTaskId, PPP_PERIODIC_TX_EVT, g_physicalLayerInformation.txIntervalMs);
+          //g_physicalLayerInformation.Status = PHYSICAL_LAYER_TX_ONLY;
+          //WaitRTCCount(20);
+
 
     } else
     {
+        LOG("ERROR");
       // The physical layer isn't idle, so we send the packet again after 20ms
-      LOG("Send again");
+      ///LOG("Send again");
       /// Send the event again.
-      osal_start_timerEx(g_physicalLayerTaskId, PPP_PERIODIC_TX_EVT, 2000);
+      //osal_start_timerEx(g_physicalLayerTaskId, TX_EVT, 2000);
     }
 
-    return (events ^ PPP_PERIODIC_TX_EVT);
+    return (events ^ TX_EVT);
   }
 
-  if (events & PPP_PERIODIC_RX_EVT)
+  if (events & RX_EVT)
   {
     if (g_physicalLayerInformation.Status == PHYSICAL_LAYER_IDLE)
     {
-      g_physicalLayerInformation.Status = PHYSICAL_LAYER_RX_ONLY;
+      //HAL_ENTER_CRITICAL_SECTION();
       //TODO
       //g_physicalLayerInformation.channel = BLE_ADV_CHN37;
       //s_phy.rxScanT0 = read_current_fine_time();
       //s_pktCfg.whitenSeed = WHITEN_SEED_CH37;
-      // rf_rx(phyBufTxLen);
-      osal_start_timerEx(g_physicalLayerTaskId, PPP_PERIODIC_RX_EVT, g_physicalLayerInformation.rxIntervalMs);
+      //SetPhysicalHardwareSRX(0);
+      PhysicalLayerReceiveRawPacket(0);
+      //osal_start_timerEx(g_physicalLayerTaskId, RX_EVT, g_physicalLayerInformation.rxIntervalMs);
+      //HAL_EXIT_CRITICAL_SECTION();
+
     } else
     {
+      //LOG("HERE");
       // Try again after 20ms
-      osal_start_timerEx(g_physicalLayerTaskId, PPP_PERIODIC_RX_EVT, 20);
+      //LOG("Retrying receive");
+      //osal_start_timerEx(g_physicalLayerTaskId, RX_EVT, 20);
     }
 
-    return (events ^ PPP_PERIODIC_RX_EVT);
+    return (events ^ RX_EVT);
   }
 
-  if (events & PPP_RX_DATA_PROCESS_EVT)
+  if (events & RX_DATA_PROCESS_EVT)
   {
     onPacketReceived(&g_currentPacketInformation);
-    return (events ^ PPP_RX_DATA_PROCESS_EVT);
+    return (events ^ RX_DATA_PROCESS_EVT);
   }
 
-  if (events & PPP_TX_DONE_EVT)
+  if (events & TX_DONE_EVT)
   {
     onProcessTxDoneEvent();
-    return (events ^ PPP_TX_DONE_EVT);
+    return (events ^ TX_DONE_EVT);
   }
 
-  if (events & PPP_RX_DONE_EVT)
+  if (events & RX_DONE_EVT)
   {
     onProcessRxDoneEvent();
-    return (events ^ PPP_RX_DONE_EVT);
+    return (events ^ RX_DONE_EVT);
   }
 
-  if (events & PPP_TRX_DONE_EVT)
+  if (events & TRX_DONE_EVT)
   {
     // TODO
-    return (events ^ PPP_TRX_DONE_EVT);
+    return (events ^ TRX_DONE_EVT);
+  }
+
+  if (events & ZIGBEE_INTERVIEW_EVT)
+  {
+      if(g_physicalLayerInformation.zigbeeInterviewState == ZIGBEE_START)
+      {
+          osal_start_timerEx(g_physicalLayerTaskId, TX_EVT, 20);
+      }else if(g_physicalLayerInformation.zigbeeInterviewState == ZIGBEE_ACK_ASSOCIATION_REQUEST)
+      {
+          osal_start_timerEx(g_physicalLayerTaskId, TX_EVT, 20);
+      }else if(g_physicalLayerInformation.zigbeeInterviewState == ZIGBEE_ACK_DATA_REQUEST_AFTER_ASSOCIATION)
+      {
+          osal_set_event(g_physicalLayerTaskId, RX_EVT);
+      }else if(g_physicalLayerInformation.zigbeeInterviewState == ZIGBEE_ASSOCIATION_RESPONSE_RECEIVED)
+      {
+          osal_start_timerEx(g_physicalLayerTaskId, TX_EVT, 20);
+      }else
+      {
+          LOG("UNKNOWN STATE %d.", g_physicalLayerInformation.zigbeeInterviewState);
+      }
+      return (events ^ ZIGBEE_INTERVIEW_EVT);
   }
 
   return 0;
@@ -280,20 +321,95 @@ void SetPhysicalHardwareSingleTX(void )
 
 static void onPacketReceived(struct PacketInformation* packet)
 {
-    uint8_t bufferLength = packet->bufferReceive[0];
-    uint8_t noidea = packet->bufferReceive[1]; //TODO
-    uint8_t* macAddrReverse = &packet->bufferReceive[2];
-    uint8_t* packetData = macAddrReverse + 6;
-    uint8_t packetLength = packetData[0];
-    uint8_t packetType = packetData[1];
-    uint8_t* packetPayload = packetData + 2;
-    if(packetType == 0x09 && packetPayload[0] == 0x47)
+    bool accept = false;
+    bool sendAck = false;
+    /*
+    LOG("Received packet!!!\n");
+    for(int i = 0; i < packet->bufferReceivedByteLength; i++)
     {
-        /*
-          if (!memcmp("Galaxy Tab S4", packetPayload, 13))
-              switch_mosfet();
-              */
+        LOG("%x ", packet->bufferReceive[i]);
+    }*/
+    LOG("P");
+    uint16_t fcf = *(uint16_t*) &packet->bufferReceive[1];
+    uint8_t frameType = fcf & 0x07;
+    if(frameType == 0x0) // Beacon
+    {
+        uint8_t sequenceNumber = packet->bufferReceive[3];
+        uint16_t sourcePAN = *(uint16_t*) &packet->bufferReceive[4];
+        uint16_t source = *(uint16_t*) &packet->bufferReceive[6];
+        uint16_t superFrameSpecification = *(uint16_t*) &packet->bufferReceive[8];
+        if(superFrameSpecification & (1 << 15))
+        {
+        LOG("COORDINATOR");
+        }else
+        {
+        //LOG("NOT");
+        }
+        LOG("Source PAN is %x for source %x" , sourcePAN,source);
+    }else if(frameType == 0x1)
+    {
+        uint8_t* buffer = &packet->bufferReceive[0];
+        if(g_physicalLayerInformation.nodeAddress)
+        {
+            if( ((g_physicalLayerInformation.nodeAddress & 0xFF) == packet->bufferReceive[6]) &&
+                ((g_physicalLayerInformation.nodeAddress >> 8) & 0xFF) == packet->bufferReceive[7])
+            {
+                uint8_t* zigbeeNetworkData = &packet->bufferReceive[10];
+                uint8_t zigBeeFrameType = *zigbeeNetworkData & 0x07;
+
+                if(zigBeeFrameType == 0x0) //DATA
+                {
+                }
+            }
+        }
+
+        if(fcf & (1 << 5))
+        {
+            sendAck = true;
+            //ACK is expected.
+        }
+        // Data
+    }else if(frameType == 0x2)
+    {
+        // ACK
+        LOG("ACK");
+        if(g_physicalLayerInformation.zigbeeInterviewState == ZIGBEE_SENT_ASSOCIATION_REQUEST)
+        {
+            g_physicalLayerInformation.zigbeeInterviewState = ZIGBEE_ACK_ASSOCIATION_REQUEST;
+            accept = true;
+        }else  if(g_physicalLayerInformation.zigbeeInterviewState == ZIGBEE_SENT_DATA_REQUEST_AFTER_ASSOCIATION)
+        {
+            g_physicalLayerInformation.zigbeeInterviewState = ZIGBEE_ACK_DATA_REQUEST_AFTER_ASSOCIATION;
+            accept = true;
+        }
+    }else if(frameType == 0x3) //Command
+    {
+        uint16_t fcf = *(uint16_t*) &packet->bufferReceive[1];
+        if(fcf & (1 << 5))
+        {
+            if(g_physicalLayerInformation.zigbeeInterviewState==ZIGBEE_ACK_DATA_REQUEST_AFTER_ASSOCIATION)
+            {
+                accept = true;
+                sendAck = true;
+                g_physicalLayerInformation.zigbeeInterviewState++;
+                g_physicalLayerInformation.nodeAddress = (packet->bufferReceive[24] << 8) + packet->bufferReceive[23];
+            }
+        }
+
     }
+
+    g_physicalLayerInformation.Status = PHYSICAL_LAYER_IDLE;
+
+    //Continue the interview
+    if(sendAck)
+    {
+        osal_set_event(g_physicalLayerTaskId, ZIGBEE_ACK_EVT);
+    }else if(accept)
+    {
+        osal_set_event(g_physicalLayerTaskId, ZIGBEE_INTERVIEW_EVT);
+    }
+    else
+        osal_set_event(g_physicalLayerTaskId, RX_EVT);
 }
 
 
@@ -304,6 +420,7 @@ static void onProcessTxDoneEvent(void)
 
 static void onProcessRxDoneEvent(void)
 {
+    LOG("Processing done event");
   g_physicalLayerInformation.Status = PHYSICAL_LAYER_IDLE;
 }
 
@@ -322,11 +439,12 @@ static uint8_t checkReceivedData(void)
 void PhysicalLayerSendRawPacket(struct PacketInformation* packet)
 {
 
-    LOG("Sending packet of length %d", packet->bufferTransmitLength);
+    //LOG("Sending packet of length %d", packet->bufferTransmitLength);
     SetPhysicalHardwareSingleTX();
 
      ll_hw_write_tfifo(&packet->bufferTransmit[0], packet->bufferTransmitLength);
      ll_hw_go();
+     llWaitingIrq=TRUE;
 
      uint32_t newmode = ll_hw_get_tr_mode();
     // info1("rf : %d md:%d",osKernelGetTickCount(), (int)newmode);
@@ -336,6 +454,30 @@ void PhysicalLayerSendRawPacket(struct PacketInformation* packet)
     }
 
 }
+
+void RawZigbeeToPacket(struct PacketInformation *packet)
+{
+            uint8_t* buffer = packet->bufferReceive;
+            ll_hw_read_rfifo_zb(buffer, &packet->bufferReceivedByteLength, &packet->receivedFooter[0], &packet->receivedFooter[1]);
+            packet->bufferReceivedIntLength = 1 + (packet->bufferReceivedByteLength >> 2);
+}
+
+void PhysicalLayerReceiveRawPacket(uint16_t rxTimeoutUs)
+{
+    //phy_hw_stop();
+    ZigbeeSetChannel(g_physicalLayerInformation.channel);
+    ZigbeeSetupHardwareTiming();
+    SetPhysicalHardwareSRX(rxTimeoutUs); //us
+    ll_hw_rst_tfifo();
+    ll_hw_rst_rfifo();
+    //set_max_length(0xff);
+
+    ll_hw_go();
+
+    llWaitingIrq=TRUE;
+}
+
+
 
 int app_main(void) {
   // debug_blink(2);
