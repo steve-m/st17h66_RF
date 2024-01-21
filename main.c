@@ -132,7 +132,7 @@ static void ble_mem_init_config(void)
 static void hal_rfphy_init(void)
 {
     //============config the txPower
-    g_rfPhyTxPower  = RF_PHY_TX_POWER_N2DBM ;
+    g_rfPhyTxPower  = RF_PHY_TX_POWER_MAX; //RF_PHY_TX_POWER_N2DBM ;
     //============config BLE_PHY TYPE
     g_rfPhyPktFmt   = PKT_FMT_BLE1M;
     //============config RF Frequency Offset

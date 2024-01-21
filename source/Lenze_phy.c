@@ -55,6 +55,7 @@
 #include "gpio.h"
 #include "flash.h"
 #include "log.h"
+#include "string.h"
 
 
 /*********************************************************************
@@ -142,6 +143,7 @@ uint32 PHY_ISR_entry_time = 0;
 
 ALIGN4_U8  phyBufRx[256];
 ALIGN4_U8  phyBufTx[256];
+uint8_t phyBufTxLen;
 static uint8_t s_pubAddr[6];
 uint8_t adv_buffer[256];
 
@@ -155,28 +157,47 @@ static phyCtx_t s_phy;
 /*********************************************************************
     LOCAL FUNCTIONS
 */
-#define MSEC 32 // 32k RTCCounts is about a second (32kHz clock right?)
-#define SEC 32768
-void debug_blink(uint32_t nblink) {
-	gpio_pin_e pin = P3; // LED is on pin 3
-	hal_gpioretention_register(pin);
-	while(nblink--) {
-		hal_gpio_write(pin, 1);
-		WaitRTCCount(50*MSEC);
-		hal_gpio_write(pin, 0);
-		if(nblink) {
-			WaitRTCCount(45*MSEC);
-		}
-	}
+
+#define MAC_DATA_LEN 6
+
+uint8	dev_mac_data[MAC_DATA_LEN]	=	{0x00,0x00,0x00,0x00,0x00,0x00};
+static uint8 public_key[] = {
+	0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0xaa,0xbb,0xcc,0xdd,0xef,
+	0xfe,0xdd,0xcc,0xbb,0xaa,0x99,0x88,0x77,0x66,0x55,0x44,0x33,0x22,0x11
+};
+
+void set_addr_from_key(uint8 *dev_mac_data, uint8 *public_key)
+{
+	//FIXME: order reversed, check!
+	dev_mac_data[5] = public_key[0] | 0xc0;
+	dev_mac_data[4] = public_key[1];
+	dev_mac_data[3] = public_key[2];
+	dev_mac_data[2] = public_key[3];
+	dev_mac_data[1] = public_key[4];
+	dev_mac_data[0] = public_key[5];
+};
+
+void set_payload_from_key(uint8_t *payload, uint8_t *public_key) {
+	/* copy last 22 bytes */
+	osal_memcpy(&payload[7], &public_key[6], 22);
+	/* append two bits of public key */
+	payload[29] = public_key[0] >> 6;
 }
 
-void switch_mosfet() {
-	gpio_pin_e pin = P18; // LED is on pin 3
-	static uint8_t state = 1;
-	hal_gpioretention_register(pin);
-	hal_gpio_write(pin, state);
-	state = !state;
-}
+/** Advertisement payload */
+static uint8 advertData[] = 
+{
+	0x1e, /* Length (30) */
+	0xff, /* Manufacturer Specific Data (type 0xff) */
+	0x4c, 0x00, /* Company ID (Apple) */
+	0x12, 0x19, /* Offline Finding type and length */
+	0x00, /* State */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, /* First two bits */
+	0x00, /* Hint (0x00) */
+};
 
 static uint8_t phy_rx_data_check(void)
 {
@@ -350,48 +371,6 @@ void phy_rx_data_process(void)
     {
         pduLen = phyBufRx[1];
     }
-
-    {
-    uint8_t  len = phyBufRx[0];
-    uint8_t noIdea = phyBufRx[1];
-    uint8_t* macAddrReverse = &phyBufRx[2];
-    uint8_t* packet = macAddrReverse + 6;
-    uint8_t* packetLen = packet[0];
-    uint8_t* packetType = packet[1];
-    uint8_t* packetVal = packet + 2;
-		switch_mosfet();
-    if(packetType == 0x09 && packetVal[0] == 0x47)
-    {
-	LOG("TYPE: %02x", packetVal[0]);
-	/*
-	LOG("BEGIN\n");
-        for(uint8_t i=0; i<pduLen; i++)
-            LOG("%02x ",packetVal[i]);
-	LOG("END");
-	LOG("BEGIN3\n");
-	for(uint8_t i = 0; i < 6; i++)
-	{
-		LOG("%02x ", galaxy[i]);
-	}
-	*/
-
-
-	    if(!memcmp("Galaxy Tab S4", packetVal, 13))
-	    {
-		switch_mosfet();
-	    }
-    }
-
-    /*
-        //LOG("[PHY RX] [-%03ddbm %4dKHz %02d CH] ",phyRssi,phyFoff-512,s_phy.rfChn);
-	*/
-    }
-
-    /*
-    uint8_t* macAddr = &phyBufRx[2];
-    uint8_t* macAddr + 6;
-
-	*/
 }
 
 void phy_tx_buf_updata(uint8_t* adva,uint8_t* txHead,uint8_t* txPayload,uint8_t dlen)
@@ -419,6 +398,7 @@ void phy_tx_buf_updata(uint8_t* adva,uint8_t* txHead,uint8_t* txPayload,uint8_t 
 */
 void PLUSPHY_IRQHandler(void)
 {
+    LOG("HANDLING INTERRUPT\r\n");
     uint8         mode;
     uint32_t      irq_status;
     //uint32_t      T2, delay;
@@ -528,9 +508,10 @@ void LenzePhy_Init(uint8 task_id)
     LenzePhy_TaskID = task_id;
     //set phy irq handeler
     JUMP_FUNCTION(V4_IRQ_HANDLER) = (uint32_t)&PLUSPHY_IRQHandler;
-    // read flash driectly becasue HW has do the address mapping for read Flash operation
-    uint8_t p[6];
-    hal_flash_read(0x11004000,p,6);
+
+
+    set_addr_from_key(dev_mac_data, public_key);
+    set_payload_from_key(advertData, public_key);
 
 /// cf. here: https://www.argenox.com/library/bluetooth-low-energy/ble-advertising-primer/
 /// First 6 bytes of bluetooth packet are MAC adddress
@@ -549,54 +530,11 @@ void LenzePhy_Init(uint8 task_id)
 
     uint8_t addressLength = 31;
 
-    // config tx buf
-    //adv buffer init
-    {
-        adv_buffer[0] = 0x02; // Advertisement length
-        adv_buffer[1] = 0x01; // Advertysement type
-        adv_buffer[2] = 0x06; // Payload
-        adv_buffer[3] = 0x10; // Advertisement length
-        adv_buffer[4] = 0xFF; // Advertisement type
-        adv_buffer[5] = 0x04; // Start manufacturer
-        adv_buffer[6] = 0x05;
-        adv_buffer[7] = 0x01;
-        adv_buffer[8] = 0x02;
-        adv_buffer[9] = 0x03;
-        adv_buffer[10] = 0xcc; //
-        adv_buffer[11] = 0x00; //
-        adv_buffer[12] = 0x03; //
-        adv_buffer[13] = 0xaa; //
-        adv_buffer[14] = 0x00; //
-        adv_buffer[15] = 0x93; //
-        adv_buffer[16] = 0xaa; //
-        adv_buffer[17] = 0x67; //
-        adv_buffer[18] = 0xF7;
-        adv_buffer[19] = 0xDB; //End manufacturer
-        adv_buffer[20] = 0x0A;
-        adv_buffer[21] = 0x08; //Local name
-        adv_buffer[22] = 'e';
-        adv_buffer[23] = 'l';
-        adv_buffer[24] = 'l';
-        adv_buffer[25] = 'o';
-        adv_buffer[26] = 'W';
-        adv_buffer[27] = 'o';
-        adv_buffer[28] = 'r';
-        adv_buffer[29] = 'l';
-        adv_buffer[30] = 'd'; // End of manufacturer info
-	adv_buffer[31] = 'H';
-	adv_buffer[32] = 'e';
-	adv_buffer[33] = 'H';
-	adv_buffer[34] = 'e';
-	adv_buffer[35] = 'l';
-	adv_buffer[36] = 'l';
-	adv_buffer[37] = 'o';
-	adv_buffer[38] = 'W';
-	adv_buffer[39] = 'o';
-	adv_buffer[40] = 'r';
-        uint8_t advHead[2]= {0x00,(addressLength+6)}; 
-        //tx buf date update
-        phy_tx_buf_updata(s_pubAddr,advHead,adv_buffer,addressLength);
-    }
+    uint8_t advHead[2]= {0x00,(addressLength+6)}; 
+    //tx buf date update
+    phy_tx_buf_updata(dev_mac_data, advHead, advertData, addressLength);
+    //phy_tx_buf_updata(s_pubAddr,advHead,adv_buffer,addressLength);
+    
     //phy pktfmt config
     s_phy.Status        =   PHYPLUS_RFPHY_IDLE;
     s_phy.txIntv        =   500;//ms
@@ -610,8 +548,8 @@ void LenzePhy_Init(uint8 task_id)
     s_pktCfg.crcSeed    =   DEFAULT_CRC_SEED;
     s_pktCfg.wtSeed     =   WHITEN_SEED_CH37;//DEFAULT_WHITEN_SEED;
     s_pktCfg.syncWord   =   DEFAULT_SYNCWORD;
-    VOID osal_start_timerEx(LenzePhy_TaskID, PPP_PERIODIC_TX_EVT, 1000);
-    VOID osal_start_timerEx(LenzePhy_TaskID, PPP_PERIODIC_RX_EVT, 2500);
+
+    VOID osal_start_timerEx(LenzePhy_TaskID, PPP_PERIODIC_TX_EVT, 5000);
 }
 
 
@@ -653,23 +591,27 @@ static void process_rx_done_evt(void)
 
 static void process_tx_done_evt(void)
 {
+
     /**
         37->38->39 adv channel
     */
     if(s_phy.rfChn==BLE_ADV_CHN37)
     {
+        LOG("switching channel to 38\r\n");
         s_phy.rfChn = BLE_ADV_CHN38;
         s_pktCfg.wtSeed = WHITEN_SEED_CH38;
         phy_rf_tx();
     }
     else if(s_phy.rfChn==BLE_ADV_CHN38)
     {
+       LOG("switching channel to 39\r\n");
         s_phy.rfChn = BLE_ADV_CHN39;
         s_pktCfg.wtSeed = WHITEN_SEED_CH39;
         phy_rf_tx();
     }
     else if(s_phy.rfChn==BLE_ADV_CHN39)
     {
+        LOG("switching channel, idle\r\n");
         s_phy.Status = PHYPLUS_RFPHY_IDLE;
     }
 }
@@ -701,9 +643,11 @@ uint16 LenzePhy_ProcessEvent(uint8 task_id, uint16 events)
             s_pktCfg.wtSeed = WHITEN_SEED_CH37;
             phy_rf_tx();
             osal_start_timerEx(LenzePhy_TaskID,PPP_PERIODIC_TX_EVT,s_phy.txIntv);
+
         }
         else
         {
+            /// Send the event again.
             osal_start_timerEx(LenzePhy_TaskID,PPP_PERIODIC_TX_EVT,20);
         }
 
@@ -718,7 +662,7 @@ uint16 LenzePhy_ProcessEvent(uint8 task_id, uint16 events)
             s_phy.rfChn = BLE_ADV_CHN37;
             s_phy.rxScanT0 = read_current_fine_time();
             s_pktCfg.wtSeed = WHITEN_SEED_CH37;
-            phy_rf_rx();
+            //rf_rx(phyBufTxLen);
             osal_start_timerEx(LenzePhy_TaskID,PPP_PERIODIC_RX_EVT,s_phy.rxIntv);
         }
         else
@@ -768,7 +712,6 @@ uint16 LenzePhy_ProcessEvent(uint8 task_id, uint16 events)
 */
 int app_main(void)
 {
-    //debug_blink(2);
     /* Initialize the operating system */
     osal_init_system();
     osal_pwrmgr_device(PWRMGR_BATTERY);
